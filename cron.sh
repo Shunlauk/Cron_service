@@ -28,7 +28,7 @@ install_cron() {  #tell me if any package manager is missing
 
     if command -v apt >/dev/null 2>&1; then
         apt update
-        DEBIAN_FRONTEND=noninteractive apt install -y cron
+        DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a apt install -y cron
 
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y cronie
@@ -100,9 +100,13 @@ else
 fi
 
 show_cron_version() {
-    if crontab -V 2>/dev/null; then
+ 	local out
+ 	
+    if out="$(crontab -V 2>&1)" && [ -n "$out" ]; then
+        echo "$out"
         return
     fi
+    
     for pkg in cronie cron; do
         if command -v rpm >/dev/null 2>&1 && rpm -q "$pkg" 2>/dev/null; then
             return
@@ -116,7 +120,9 @@ show_cron_version() {
         if command -v pacman >/dev/null 2>&1 && pacman -Q "$pkg" 2>/dev/null; then
             return
         fi
+        
     done
+    
     echo "  (version info not available for this cron implementation)"
 }
 echo "Cron implementation:"
