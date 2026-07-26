@@ -47,15 +47,14 @@ fi
 
 SERVICE=""
 
-if systemctl list-unit-files | grep -q "^cron.service"; then  
+if systemctl cat cron >/dev/null 2>&1; then
     SERVICE="cron"
 
-elif systemctl list-unit-files | grep -q "^crond.service"; then
+elif systemctl cat crond >/dev/null 2>&1; then
     SERVICE="crond"
 
 else
     echo "Cron service not found after installation."
-    echo "Please verify your cron package installation."
     exit 1
 fi
 
@@ -80,5 +79,7 @@ else
     exit 1
 fi
 
-echo "Version:"
-crontab -V 2>/dev/null || true
+if crontab -V >/dev/null 2>&1; then
+    echo "Version:"
+    crontab -V
+fi
