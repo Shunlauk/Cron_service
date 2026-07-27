@@ -8,8 +8,40 @@ if [ -z "${BASH_VERSION:-}" ]; then #I known some of will try to run it as sh cr
 fi
 
 set -euo pipefail
+QUIET=0
+for arg in "$@"; do
+	case "$arg" in
+		-h|--help)
+			cat <<EOF
+Usage: sudo $0 [--quiet][--help]
 
-echo "Cron Setup Utility"
+Idempotent cron setup utility for systemd-based Linux systems.
+Installs cron/cronie via the system package manager if missing,
+enables and starts the service, and reports its version.
+
+Options:
+  -q, --quiet   Suppress progress output; only errors and the exit code
+  -h, --help    Show this help message and exit
+EOF
+			exit 0
+    			;;
+    		-q|--quiet)
+    			QUIET=1
+    			;;
+    		*)
+    			echo "Unknown option: $arg" >&2
+    			echo "Try '$0 --help' for usage" >&2
+    			exit 1
+    	esac
+done
+
+log() {
+	if [[ "$QUIET" -eq 0 ]]; then
+		echo "$@"
+	fi
+}
+
+log "Cron Setup Utility"
 
 if [[ $EUID -ne 0 ]]; then  #this guy check if you are it as sudo or not
     echo "Please run this script as root."
@@ -24,7 +56,7 @@ fi
 
 install_cron() {  #tell me if any package manager is missing
 
-    echo "Installing cron..."
+    log "Installing cron..."
 
     if command -v apt >/dev/null 2>&1; then
         apt update
@@ -54,9 +86,9 @@ install_cron() {  #tell me if any package manager is missing
 }
 
 if command -v crontab >/dev/null 2>&1; then #check if crontab is installed or not 
-    echo "✓ crontab is already installed."
+    log "✓ crontab is already installed."
 else
-    echo "crontab not found."
+    log "crontab not found."
     install_cron
 fi
 
@@ -74,8 +106,8 @@ else
     exit 1
 fi
 
-echo "Using service: $SERVICE"
-echo "Enabling service..."
+log "Using service: $SERVICE"
+log "Enabling service..."
 
 if ! systemctl enable "$SERVICE"; then
     echo "✗ Failed to enable $SERVICE (it may be masked)."
@@ -90,16 +122,18 @@ else
     systemctl start "$SERVICE"
 fi
 
-echo
+log ""
 
 if systemctl is-active --quiet "$SERVICE"; then 
-    echo "Cron setup completed successfully."
+    log "Cron setup completed successfully."
 else
-    echo "Failed to start cron service."
+    echo "Failed to start cron service. Recent logs:"
+    journalctl -u "$SERVICE" --no-pager -n 15 || true
     exit 1
 fi
 
 show_cron_version() {
+
  	local out
  	
     if out="$(crontab -V 2>&1)" && [ -n "$out" ]; then
@@ -108,6 +142,7 @@ show_cron_version() {
     fi
     
     for pkg in cronie cron; do
+    
         if command -v rpm >/dev/null 2>&1 && rpm -q "$pkg" 2>/dev/null; then
             return
         fi
@@ -125,5 +160,8 @@ show_cron_version() {
     
     echo "  (version info not available for this cron implementation)"
 }
-echo "Cron implementation:"
-show_cron_version
+
+if [[ "$QUIET" -eq 0 ]]; then
+	echo "Cron implementation:"
+	show_cron_version
+fi
