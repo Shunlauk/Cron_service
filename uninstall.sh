@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Idempotent cron uninstall utility - safe to re-run.
 # Backs up every user's crontab (crontab -l) before removing cron/cronie.
+# Supports both systemd and OpenRC (e.g. Alpine Linux) init systems.
 # Does NOT touch /etc/crontab or /etc/cron.d - only each user's personal crontab.
 if [ -z "${BASH_VERSION:-}" ]; then
     exec bash "$0" "$@"
@@ -49,10 +50,33 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-if ! command -v systemctl >/dev/null 2>&1 || ! systemctl list-units >/dev/null 2>&1; then
-    echo "systemd not detected — this script requires a systemd-based system."
-    exit 1
-fi
+detect_init() {
+    if [ -d /run/systemd/system ]; then
+        echo "systemd"
+    elif [ -d /run/openrc ] || command -v rc-service >/dev/null 2>&1; then
+        echo "openrc"
+    elif [ "$(ps -p 1 -o comm=)" = "init" ]; then
+        echo "sysvinit"
+    else
+        echo "unknown"
+    fi
+}
+
+INIT_SYSTEM="$(detect_init)"
+case "$INIT_SYSTEM" in
+    systemd|openrc)
+        ;;
+    sysvinit)
+        echo "This system appears to run SysVinit, which isn't supported (only systemd and OpenRC are)."
+        exit 1
+        ;;
+    *)
+        echo "Could not detect a supported init system (systemd or OpenRC) on this system."
+        exit 1
+        ;;
+esac
+log "Init system: $INIT_SYSTEM"
+
 
 # Back up to the invoking user's home directory (not root's) when run via sudo.
 if [[ -n "${SUDO_USER:-}" ]] && getent passwd "$SUDO_USER" >/dev/null 2>&1; then
@@ -108,25 +132,48 @@ backup_crontabs() {
 
 backup_crontabs
 
-SERVICE=""
-if systemctl cat cron >/dev/null 2>&1; then
-    SERVICE="cron"
-elif systemctl cat crond >/dev/null 2>&1; then
-    SERVICE="crond"
-fi
-
-if [[ -n "$SERVICE" ]]; then
-    log "Using service: $SERVICE"
-    if systemctl is-active --quiet "$SERVICE"; then
-        log "Stopping service..."
-        systemctl stop "$SERVICE" || echo "⚠ Could not stop $SERVICE; continuing anyway."
+if [[ "$INIT_SYSTEM" == "systemd" ]]; then #systemctl
+    if systemctl cat cron >/dev/null 2>&1; then
+        SERVICE="cron"
+    elif systemctl cat crond >/dev/null 2>&1; then
+        SERVICE="crond"
     fi
-    if systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
-        log "Disabling service..."
-        systemctl disable "$SERVICE" || echo "⚠ Could not disable $SERVICE; continuing anyway."
+ 
+    if [[ -n "$SERVICE" ]]; then
+        log "Using service: $SERVICE"
+        if systemctl is-active --quiet "$SERVICE"; then
+            log "Stopping service..."
+            systemctl stop "$SERVICE" || echo "⚠ Could not stop $SERVICE; continuing anyway."
+        fi
+        if systemctl is-enabled --quiet "$SERVICE" 2>/dev/null; then
+            log "Disabling service..."
+            systemctl disable "$SERVICE" || echo "⚠ Could not disable $SERVICE; continuing anyway."
+        fi
+    else
+        log "No cron service unit found; skipping stop/disable."
     fi
-else
-    log "No cron service unit found; skipping stop/disable."
+else # OpenRC
+    if [ -f /etc/init.d/crond ]; then
+        SERVICE="crond"
+    elif [ -f /etc/init.d/cronie ]; then
+        SERVICE="cronie"
+    elif [ -f /etc/init.d/cron ]; then
+        SERVICE="cron"
+    fi
+ 
+    if [[ -n "$SERVICE" ]]; then
+        log "Using service: $SERVICE"
+        if rc-service "$SERVICE" status >/dev/null 2>&1; then
+            log "Stopping service..."
+            rc-service "$SERVICE" stop || echo "⚠ Could not stop $SERVICE; continuing anyway."
+        fi
+        if rc-update show default 2>/dev/null | grep -qw "$SERVICE"; then
+            log "Disabling service..."
+            rc-update del "$SERVICE" default || echo "⚠ Could not disable $SERVICE; continuing anyway."
+        fi
+    else
+        log "No cron service script found; skipping stop/disable."
+    fi
 fi
 
 uninstall_cron() {

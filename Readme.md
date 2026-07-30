@@ -1,6 +1,6 @@
 # Cron Setup Utility
 
-A small toolkit of two Bash scripts for managing **cron** (or **cronie**) on most Linux distributions: `setup_cron.sh` installs and enables it, `uninstall.sh` backs up every user's crontab and removes it.
+A small toolkit of two Bash scripts for managing **cron** (or **cronie**) on most Linux distributions, using either **systemd** or **OpenRC**: `setup_cron.sh` installs and enables it, `uninstall.sh` backs up every user's crontab and removes it.
 
 This is intended for people who want to automate Python scripts or other scheduled tasks but have not yet installed or configured the cron service.
 
@@ -12,9 +12,9 @@ This is intended for people who want to automate Python scripts or other schedul
 ## Features
 
 - Idempotent — safe to run more than once; steps that are already done (crontab installed, service enabled, service running) are detected and skipped.
+- Works on both **systemd** and **OpenRC** (e.g. Alpine Linux) systems, automatically using `systemctl` or `rc-service`/`rc-update` as appropriate.
 - Re-executes itself under `bash` automatically if invoked with `sh` or another shell.
 - Checks if the script is run with root privileges.
-- Verifies the system is actually running systemd before doing anything.
 - Detects whether `crontab` is already installed.
 - Installs cron automatically if it is missing.
 - Supports multiple Linux distributions:
@@ -24,12 +24,25 @@ This is intended for people who want to automate Python scripts or other schedul
   - Arch Linux
   - openSUSE
   - Alpine Linux
-- Detects whether the system uses `cron.service` or `crond.service`.
+- Detects the correct cron service name for whichever init system is running.
 - Enables the cron service so it starts automatically after reboot.
 - Starts the service if it is not already running.
 - Displays the installed cron version, falling back to the distro's package database if `crontab -V` isn't supported.
-- Prints recent service logs automatically if the cron service fails to start, to help with troubleshooting.
+- Prints diagnostics automatically if the cron service fails to start, to help with troubleshooting.
 - Supports `-q`/`--quiet` and `-h`/`--help` flags.
+
+---
+
+## Supported Init Systems
+
+Both scripts detect which init system is running and use the matching tool — no need to tell them which one you're on:
+
+| Init system | Detection | Service commands used |
+|---|---|---|
+| systemd | `/run/systemd/system` exists | `systemctl enable/start/stop/disable` |
+| OpenRC (e.g. Alpine Linux) | `/run/openrc` exists, or `rc-service` is installed | `rc-update add/del`, `rc-service start/stop/status` |
+
+If neither is detected (e.g. a system running plain SysVinit), the script exits with a message naming what it found instead of a generic error.
 
 ---
 
@@ -44,14 +57,12 @@ This is intended for people who want to automate Python scripts or other schedul
 | openSUSE        | zypper          | cron              |
 | Alpine Linux    | apk             | cronie            |
 
-> Alpine Linux normally ships with OpenRC rather than systemd. Since this script requires systemd, the Alpine branch above only helps on a systemd-enabled Alpine setup.
-
 ---
 
 ## Requirements
 
 - Linux
-- systemd
+- systemd or OpenRC
 - Bash (the script re-executes itself under `bash` automatically if run with `sh`)
 - Root (sudo) privileges
 
@@ -91,25 +102,45 @@ sudo ./setup_cron.sh --quiet
 1. Re-executes itself under `bash` if it was launched with a different shell (e.g. `sh`).
 2. Parses `--quiet` / `--help` options.
 3. Verifies the script is executed as root.
-4. Verifies the system is running systemd.
+4. Detects the init system — systemd or OpenRC — and exits with a clear message if neither is found.
 5. Checks whether `crontab` exists.
 6. Installs cron (or cronie) if necessary.
-7. Detects the correct cron service (`cron` or `crond`).
-8. Enables the service so it starts on boot.
-9. Starts the service if it isn't already running.
-10. Confirms the service is running, printing recent logs if it failed to start.
+7. Detects the correct cron service name (`cron`/`crond` on systemd; `crond`/`cronie`/`cron` on OpenRC).
+8. Enables the service so it starts on boot (`systemctl enable`, or `rc-update add ... default`).
+9. Starts the service if it isn't already running (`systemctl start`, or `rc-service ... start`).
+10. Confirms the service is running, printing diagnostics if it failed to start.
 11. Prints the cron version, unless `--quiet` was passed.
 
 ---
 
 ## Example Output
 
+**On a systemd system:**
+
 ```text
 Cron Setup Utility
+Init system: systemd
 ✓ crontab is already installed.
 Using service: cron
 Enabling service...
 ✓ Service already running.
+
+Cron setup completed successfully.
+Cron implementation:
+cronie 1.7.2
+```
+
+**On an OpenRC system (e.g. Alpine Linux):**
+
+```text
+Cron Setup Utility
+Init system: openrc
+✓ crontab is already installed.
+Using service: crond
+Enabling service...
+ * service crond added to runlevel default
+Starting service...
+ * Starting crond ...
 
 Cron setup completed successfully.
 Cron implementation:
@@ -128,10 +159,16 @@ You can verify it by running:
 systemctl status cron
 ```
 
-or on some distributions:
+or, on some distributions:
 
 ```bash
 systemctl status crond
+```
+
+or, on OpenRC systems (e.g. Alpine):
+
+```bash
+rc-service crond status
 ```
 
 To view your scheduled jobs:
@@ -164,14 +201,14 @@ Once cron is installed and running, this script's job is done — scheduling you
 
 ## Uninstalling Cron
 
-A companion script, `uninstall.sh`, removes cron/cronie from the system. Before touching anything else, it backs up **every user's** crontab (not just root's), since removing the cron package can wipe each user's scheduled jobs.
+A companion script, `uninstall.sh`, removes cron/cronie from the system. Before touching anything else, it backs up **every user's** crontab (not just root's), since removing the cron package can wipe each user's scheduled jobs. Like `setup_cron.sh`, it works on both systemd and OpenRC.
 
 ### What It Does
 
 1. Re-executes itself under `bash` if launched with a different shell.
 2. Parses `--quiet` / `--help` options.
 3. Verifies the script is executed as root.
-4. Verifies the system is running systemd.
+4. Detects the init system — systemd or OpenRC — and exits with a clear message if neither is found.
 5. Backs up every account's crontab (any user with a non-empty crontab) to a single timestamped file.
 6. Stops the cron service if it's running.
 7. Disables the cron service if it's enabled.
@@ -215,8 +252,11 @@ crontab their_jobs.txt
 
 ### Example Output
 
+**On a systemd system:**
+
 ```text
 Cron Uninstall Utility
+Init system: systemd
 Backing up existing crontabs...
 ✓ Crontab backup saved to: /home/username/cron_backups/crontab_backup_20260728_153000.txt
 Using service: cron
@@ -227,14 +267,30 @@ Removing cron...
 Cron uninstall completed.
 ```
 
+**On an OpenRC system (e.g. Alpine Linux):**
+
+```text
+Cron Uninstall Utility
+Init system: openrc
+Backing up existing crontabs...
+✓ Crontab backup saved to: /home/username/cron_backups/crontab_backup_20260728_153000.txt
+Using service: crond
+Stopping service...
+ * Stopping crond ...
+Disabling service...
+ * service crond removed from runlevel default
+Removing cron...
+
+Cron uninstall completed.
+```
+
 ---
 
 ## Limitations
 
-- Requires a system using **systemd**.
+- Requires systemd or OpenRC; other init systems (e.g. plain SysVinit) are not supported.
 - `setup_cron.sh` does not create scheduled jobs.
 - `uninstall.sh` backs up each user's personal crontab only — it does not back up or remove `/etc/crontab` or `/etc/cron.d/` entries.
-- Does not support non-systemd init systems such as OpenRC or SysV init.
 - Assumes an active internet connection when installation is required.
 
 ---
@@ -246,7 +302,7 @@ Applies to both `setup_cron.sh` and `uninstall.sh`.
 | Code | Meaning |
 |------|---------|
 | 0 | Success, or `--help` was requested. |
-| 1 | An error occurred (not run as root, systemd not detected, unsupported distribution, unknown option, or the cron service could not be enabled/started/stopped/disabled). |
+| 1 | An error occurred (not run as root, no supported init system detected, unsupported distribution, unknown option, or the cron service could not be enabled/started/stopped/disabled). |
 | *other* | Occasionally, a failure inside the package manager itself (e.g. `apt`, `dnf`) propagates that tool's own exit code instead of `1`. |
 
 ---

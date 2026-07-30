@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Idempotent cron setup utility - safe to re-run.
 # Installs and enables the system cron service (skips steps already done).
+# Supports both systemd and OpenRC (e.g. Alpine Linux) init systems.
 # This does NOT schedule your Python script in cron - that's a separate step.
 
-if [ -z "${BASH_VERSION:-}" ]; then #I known some of will try to run it as sh cron.sh
+if [ -z "${BASH_VERSION:-}" ]; then #I known someone of will try to run it as sh cron.sh
     exec bash "$0" "$@"
 fi
 
@@ -49,10 +50,33 @@ if [[ $EUID -ne 0 ]]; then  #this guy check if you are it as sudo or not
     exit 1
 fi
 
-if ! command -v systemctl >/dev/null 2>&1 || ! systemctl list-units >/dev/null 2>&1; then
-    echo "systemd not detected — this script requires a systemd-based system."
-    exit 1
-fi
+detect_init() {
+    if [ -d /run/systemd/system ]; then
+        echo "systemd"
+    elif [ -d /run/openrc ] || command -v rc-service >/dev/null 2>&1; then
+        echo "openrc"
+    elif [ "$(ps -p 1 -o comm=)" = "init" ]; then
+        echo "sysvinit"
+    else
+        echo "unknown"
+    fi
+}
+
+INIT_SYSTEM="$(detect_init)"
+case "$INIT_SYSTEM" in
+    systemd|openrc)
+        ;;
+    sysvinit)
+        echo "This system appears to run SysVinit, which isn't supported (only systemd and OpenRC are)."
+        exit 1
+        ;;
+    *)
+        echo "Could not detect a supported init system (systemd or OpenRC) on this system."
+        exit 1
+        ;;
+esac
+log "Init system: $INIT_SYSTEM"
+ 
 
 install_cron() {  #tell me if any package manager is missing
 
@@ -92,48 +116,79 @@ else
     install_cron
 fi
 
-
 SERVICE=""
 
-if systemctl cat cron >/dev/null 2>&1; then
-    SERVICE="cron"
-
-elif systemctl cat crond >/dev/null 2>&1; then
-    SERVICE="crond"
-
-else
-    echo "Cron service not found after installation."
-    exit 1
-fi
-
-log "Using service: $SERVICE"
-log "Enabling service..."
-
-if ! systemctl enable "$SERVICE"; then
-    echo "✗ Failed to enable $SERVICE (it may be masked)."
-    echo "  Check with: systemctl status $SERVICE"
-    exit 1
-fi
-
-if systemctl is-active --quiet "$SERVICE"; then
-    echo "✓ Service already running."
-else
-    echo "Starting service..."
-    systemctl start "$SERVICE"
-fi
-
-log ""
-
-if systemctl is-active --quiet "$SERVICE"; then 
-    log "Cron setup completed successfully."
-else
-    echo "Failed to start cron service. Recent logs:"
-    journalctl -u "$SERVICE" --no-pager -n 15 || true
-    exit 1
+if [[ "$INIT_SYSTEM" == "systemd" ]]; then #systemctl
+    if systemctl cat cron >/dev/null 2>&1; then
+        SERVICE="cron"
+    elif systemctl cat crond >/dev/null 2>&1; then
+        SERVICE="crond"
+    else
+        echo "Cron service not found after installation."
+        exit 1
+    fi
+ 
+    log "Using service: $SERVICE"
+    log "Enabling service..."
+    if ! systemctl enable "$SERVICE"; then
+        echo "✗ Failed to enable $SERVICE (it may be masked)."
+        echo "  Check with: systemctl status $SERVICE"
+        exit 1
+    fi
+ 
+    if systemctl is-active --quiet "$SERVICE"; then
+        echo "✓ Service already running."
+    else
+        echo "Starting service..."
+        systemctl start "$SERVICE"
+    fi
+ 
+    log ""
+    if systemctl is-active --quiet "$SERVICE"; then
+        log "Cron setup completed successfully."
+    else
+        echo "Failed to start cron service. Recent logs:"
+        journalctl -u "$SERVICE" --no-pager -n 15 || true
+        exit 1
+    fi
+else # OpenRC
+    if [ -f /etc/init.d/crond ]; then
+        SERVICE="crond"
+    elif [ -f /etc/init.d/cronie ]; then
+        SERVICE="cronie"
+    elif [ -f /etc/init.d/cron ]; then
+        SERVICE="cron"
+    else
+        echo "Cron service not found after installation."
+        exit 1
+    fi
+ 
+    log "Using service: $SERVICE"
+    log "Enabling service..."
+    if ! rc-update add "$SERVICE" default; then
+        echo "✗ Failed to enable $SERVICE."
+        echo "  Check with: rc-service $SERVICE status"
+        exit 1
+    fi
+ 
+    if rc-service "$SERVICE" status >/dev/null 2>&1; then
+        echo "✓ Service already running."
+    else
+        echo "Starting service..."
+        rc-service "$SERVICE" start
+    fi
+ 
+    log ""
+    if rc-service "$SERVICE" status >/dev/null 2>&1; then
+        log "Cron setup completed successfully."
+    else
+        echo "Failed to start cron service."
+        echo "Check status with: rc-service $SERVICE status"
+        exit 1
+    fi
 fi
 
 show_cron_version() {
-
  	local out
  	
     if out="$(crontab -V 2>&1)" && [ -n "$out" ]; then
@@ -142,7 +197,6 @@ show_cron_version() {
     fi
     
     for pkg in cronie cron; do
-    
         if command -v rpm >/dev/null 2>&1 && rpm -q "$pkg" 2>/dev/null; then
             return
         fi
