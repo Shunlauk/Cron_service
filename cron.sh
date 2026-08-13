@@ -1,14 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Idempotent cron setup utility - safe to re-run.
 # Installs and enables the system cron service (skips steps already done).
 # Supports both systemd and OpenRC (e.g. Alpine Linux) init systems.
 # This does NOT schedule your Python script in cron - that's a separate step.
 
-if [ -z "${BASH_VERSION:-}" ]; then #I known someone of will try to run it as sh cron.sh
-    exec bash "$0" "$@"
-fi
-
-set -euo pipefail
+set -eu
 QUIET=0
 for arg in "$@"; do
 	case "$arg" in
@@ -37,32 +33,32 @@ EOF
 done
 
 log() {
-	if [[ "$QUIET" -eq 0 ]]; then
+	if [ "$QUIET" -eq 0 ]; then
 		echo "$@"
 	fi
 }
 
 log "Cron Setup Utility"
 
-if [[ $EUID -ne 0 ]]; then  #this guy check if you are it as sudo or not
+if [ "$(id -u)" -ne 0 ]; then  #this guy check if you are it as sudo or not
     echo "Please run this script as root."
     echo "Example: sudo ./setup_cron.sh"
     exit 1
 fi
 
+INIT_SYSTEM=""
 detect_init() {
     if [ -d /run/systemd/system ]; then
-        echo "systemd"
+        INIT_SYSTEM="systemd"
     elif [ -d /run/openrc ] || command -v rc-service >/dev/null 2>&1; then
-        echo "openrc"
+        INIT_SYSTEM="openrc"
     elif [ "$(ps -p 1 -o comm=)" = "init" ]; then
-        echo "sysvinit"
-    else
-        echo "unknown"
+        INIT_SYSTEM="sysvinit"
     fi
 }
 
-INIT_SYSTEM="$(detect_init)"
+detect_init
+
 case "$INIT_SYSTEM" in
     systemd|openrc)
         ;;
@@ -93,7 +89,7 @@ install_cron() {  #tell me if any package manager is missing
         yum install -y cronie
 
     elif command -v pacman >/dev/null 2>&1; then
-        pacman -Syu --noconfirm cronie
+        pacman -Sy --noconfirm cronie #i don't use -Syu cause it was doing full system upgrade 
 
     elif command -v zypper >/dev/null 2>&1; then
         zypper --non-interactive refresh
@@ -118,11 +114,13 @@ fi
 
 SERVICE=""
 
-if [[ "$INIT_SYSTEM" == "systemd" ]]; then #systemctl
+if [ "$INIT_SYSTEM" = "systemd" ]; then #systemctl
     if systemctl cat cron >/dev/null 2>&1; then
         SERVICE="cron"
     elif systemctl cat crond >/dev/null 2>&1; then
         SERVICE="crond"
+    elif systemctl cat cronie >/dev/nul 2>&1; then
+    		SERVICE="cronie"
     else
         echo "Cron service not found after installation."
         exit 1
@@ -137,9 +135,10 @@ if [[ "$INIT_SYSTEM" == "systemd" ]]; then #systemctl
     fi
  
     if systemctl is-active --quiet "$SERVICE"; then
-        echo "✓ Service already running."
+        log "✓ Service already running."
+        log "Cron-setup was already Completed"
     else
-        echo "Starting service..."
+        log "Starting service..."
         systemctl start "$SERVICE"
     fi
  
@@ -172,9 +171,10 @@ else # OpenRC
     fi
  
     if rc-service "$SERVICE" status >/dev/null 2>&1; then
-        echo "✓ Service already running."
+        log "✓ Service already running."
+        log "Cron-setup was already Completed"
     else
-        echo "Starting service..."
+        log "Starting service..."
         rc-service "$SERVICE" start
     fi
  
@@ -186,36 +186,4 @@ else # OpenRC
         echo "Check status with: rc-service $SERVICE status"
         exit 1
     fi
-fi
-
-show_cron_version() {
- 	local out
- 	
-    if out="$(crontab -V 2>&1)" && [ -n "$out" ]; then
-        echo "$out"
-        return
-    fi
-    
-    for pkg in cronie cron; do
-        if command -v rpm >/dev/null 2>&1 && rpm -q "$pkg" 2>/dev/null; then
-            return
-        fi
-        
-        if command -v dpkg-query >/dev/null 2>&1 && dpkg -s "$pkg" >/dev/null 2>&1; then
-            echo "$pkg $(dpkg-query -W -f='${Version}' "$pkg")"
-            return
-        fi
-        
-        if command -v pacman >/dev/null 2>&1 && pacman -Q "$pkg" 2>/dev/null; then
-            return
-        fi
-        
-    done
-    
-    echo "  (version info not available for this cron implementation)"
-}
-
-if [[ "$QUIET" -eq 0 ]]; then
-	echo "Cron implementation:"
-	show_cron_version
 fi

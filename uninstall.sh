@@ -1,12 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Idempotent cron uninstall utility - safe to re-run.
 # Backs up every user's crontab (crontab -l) before removing cron/cronie.
 # Supports both systemd and OpenRC (e.g. Alpine Linux) init systems.
 # Does NOT touch /etc/crontab or /etc/cron.d - only each user's personal crontab.
-if [ -z "${BASH_VERSION:-}" ]; then
-    exec bash "$0" "$@"
-fi
-set -euo pipefail
+
+set -eu
 
 QUIET=0
 
@@ -37,32 +35,32 @@ EOF
 done
 
 log() {
-	if [[ "$QUIET" -eq 0 ]]; then
+	if [ "$QUIET" -eq 0 ]; then
 		echo "$@"
 	fi
 }
 
 log "Cron Uninstall Utility"
 
-if [[ $EUID -ne 0 ]]; then
+if [ "$(id -u)" -ne 0 ]; then
     echo "Please run this script as root."
     echo "Example: sudo ./uninstall.sh"
     exit 1
 fi
 
+INIT_SYSTEM=""
 detect_init() {
     if [ -d /run/systemd/system ]; then
-        echo "systemd"
+        INIT_SYSTEM="systemd"
     elif [ -d /run/openrc ] || command -v rc-service >/dev/null 2>&1; then
-        echo "openrc"
+        INIT_SYSTEM="openrc"
     elif [ "$(ps -p 1 -o comm=)" = "init" ]; then
-        echo "sysvinit"
-    else
-        echo "unknown"
+        INIT_SYSTEM="sysvinit"
     fi
 }
 
-INIT_SYSTEM="$(detect_init)"
+detect_init 
+
 case "$INIT_SYSTEM" in
     systemd|openrc)
         ;;
@@ -79,7 +77,7 @@ log "Init system: $INIT_SYSTEM"
 
 
 # Back up to the invoking user's home directory (not root's) when run via sudo.
-if [[ -n "${SUDO_USER:-}" ]] && getent passwd "$SUDO_USER" >/dev/null 2>&1; then
+if [ -n "${SUDO_USER:-}" ] && getent passwd "$SUDO_USER" >/dev/null 2>&1; then
     REAL_HOME="$(getent passwd "$SUDO_USER" | cut -d: -f6)"
     BACKUP_OWNER="$SUDO_USER"
 else
@@ -105,7 +103,7 @@ backup_crontabs() {
     local found_any=0
     local username user_crontab
     while IFS=: read -r username _ _ _ _ _ _; do
-        if user_crontab="$(crontab -l -u "$username" 2>/dev/null)" && [[ -n "$user_crontab" ]]; then
+        if user_crontab="$(crontab -l -u "$username" 2>/dev/null)" && [ -n "$user_crontab" ]; then
             {
                 echo
                 echo "## User: $username"
@@ -115,12 +113,12 @@ backup_crontabs() {
         fi
     done < /etc/passwd
 
-    if [[ "$found_any" -eq 1 ]]; then
+    if [ "$found_any" -eq 1 ]; then
         mkdir -p "$BACKUP_DIR"
         backup_file="$BACKUP_DIR/crontab_backup_$(date +%Y%m%d_%H%M%S).txt"
         mv "$tmp_file" "$backup_file"
         chmod 600 "$backup_file"
-        if [[ -n "$BACKUP_OWNER" ]]; then
+        if [ -n "$BACKUP_OWNER" ]; then
             chown "$BACKUP_OWNER":"$(id -gn "$BACKUP_OWNER")" "$BACKUP_DIR" "$backup_file" 2>/dev/null || true
         fi
         echo "✓ Crontab backup saved to: $backup_file"
@@ -131,15 +129,17 @@ backup_crontabs() {
 }
 
 backup_crontabs
-
-if [[ "$INIT_SYSTEM" == "systemd" ]]; then #systemctl
+SERVICE=""
+if [ "$INIT_SYSTEM" = "systemd" ]; then #systemctl
     if systemctl cat cron >/dev/null 2>&1; then
         SERVICE="cron"
     elif systemctl cat crond >/dev/null 2>&1; then
         SERVICE="crond"
+    elif systemctl cat cronie >/dev/null 2>&1; then
+    		SERVICE="cronie"
     fi
  
-    if [[ -n "$SERVICE" ]]; then
+    if [ -n "$SERVICE" ]; then
         log "Using service: $SERVICE"
         if systemctl is-active --quiet "$SERVICE"; then
             log "Stopping service..."
@@ -161,7 +161,7 @@ else # OpenRC
         SERVICE="cron"
     fi
  
-    if [[ -n "$SERVICE" ]]; then
+    if [ -n "$SERVICE" ]; then
         log "Using service: $SERVICE"
         if rc-service "$SERVICE" status >/dev/null 2>&1; then
             log "Stopping service..."
