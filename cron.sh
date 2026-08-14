@@ -119,7 +119,7 @@ if [ "$INIT_SYSTEM" = "systemd" ]; then #systemctl
         SERVICE="cron"
     elif systemctl cat crond >/dev/null 2>&1; then
         SERVICE="crond"
-    elif systemctl cat cronie >/dev/nul 2>&1; then
+    elif systemctl cat cronie >/dev/null 2>&1; then
     		SERVICE="cronie"
     else
         echo "Cron service not found after installation."
